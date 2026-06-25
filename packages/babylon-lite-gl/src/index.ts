@@ -98,21 +98,8 @@ export {
 export type { GLRenderTarget, GLRenderTargetOptions, GLFloatRenderTargetOptions, GLPingPong } from "./render-target.js";
 
 // ─── Meshes / buffers / instancing (also at `@babylonjs/lite-gl/mesh`) ──
-export {
-    createVertexBuffer,
-    updateVertexBuffer,
-    createIndexBuffer,
-    disposeBuffer,
-    bindIndexBuffer,
-    bindAttributes,
-    unbindInstanceAttributes,
-    drawIndexed,
-    createMeshVao,
-    bindMeshVao,
-    drawMesh,
-    disposeMeshVao,
-} from "./mesh.js";
-export type { GLVertexBuffer, GLIndexBuffer, GLAttributeDescriptor, GLMeshVertexBuffer, GLMeshVao } from "./mesh.js";
+export { createVertexBuffer, updateVertexBuffer, createIndexBuffer, disposeBuffer, bindIndexBuffer, bindAttributes, unbindInstanceAttributes, drawIndexed } from "./mesh.js";
+export type { GLVertexBuffer, GLIndexBuffer, GLAttributeDescriptor } from "./mesh.js";
 
 // ─── Blend modes ─────────────────────────────────────────────────────
 // GLBlendMode / GLBlendEquation are const + same-name type; one value
@@ -135,3 +122,33 @@ export type { GLSprite, GLSpriteColor, GLSpriteRendererOptions, GLSpriteRenderer
 // GLSamplingMode is a const + same-name type; one value re-export carries both.
 export { createHtmlElementTexture, updateHtmlElementTexture, GLSamplingMode } from "./html-texture.js";
 export type { GLHtmlElementTextureOptions } from "./html-texture.js";
+
+// ─── Text — CPU/data layer (also at `@babylonjs/lite-gl/text`) ───────
+// Phase 1: the GPU-agnostic Slug text CPU/data layer (fonts, layout, glyph-curve
+// extraction, glyph storage/atlas staging, per-instance text data). GPU upload +
+// shaders land in a later phase.
+export type { Font } from "./text.js";
+export { loadFont, createFontFromBuffer } from "./text.js";
+export { extractGlyphCurves, cubicToQuadratics } from "./text.js";
+export type { TextLayoutOptions } from "./text.js";
+export type { GlyphStorage, CurveSetId, QuadCurve, GlyphBounds, GlyphCurves } from "./text.js";
+export { createGlyphStorage, updateGlyphStorage, disposeGlyphStorage } from "./text.js";
+export type { TextData, PlacedGlyph, GlyphRun, TextDataUpdate } from "./text.js";
+export { createTextData, updateTextData, disposeTextData } from "./text.js";
+export type { DefaultTextData } from "./text.js";
+export { createDefaultTextData, updateDefaultTextData, disposeDefaultTextData } from "./text.js";
+
+// ─── Text — WebGL2 renderer (float-texture atlas + instanced Slug draw) ──
+export type { TextLayer, TextLayerOptions, TextRenderer, TextRendererOptions } from "./text.js";
+export {
+    createTextLayer,
+    setTextLayerPosition,
+    createTextRenderer,
+    renderText,
+    isTextRendererReady,
+    addTextRendererLayer,
+    removeTextRendererLayer,
+    registerTextRenderer,
+    unregisterTextRenderer,
+    disposeTextRenderer,
+} from "./text.js";

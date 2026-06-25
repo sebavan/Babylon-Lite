@@ -136,6 +136,10 @@ function emitPackageJson(outDir: string): Plugin {
                         import: "./dynamic-texture.js",
                         types: "./dynamic-texture.d.ts",
                     },
+                    "./text": {
+                        import: "./text.js",
+                        types: "./text.d.ts",
+                    },
                 },
             };
             writeFileSync(resolve(outDir, "package.json"), JSON.stringify(pkg, null, 2) + "\n");
@@ -163,6 +167,7 @@ export default defineConfig(({ mode }) => {
                     "depth-stencil": resolve(__dirname, "src/depth-stencil.ts"),
                     scissor: resolve(__dirname, "src/scissor.ts"),
                     "dynamic-texture": resolve(__dirname, "src/dynamic-texture.ts"),
+                    text: resolve(__dirname, "src/text.ts"),
                 },
                 formats: ["es"],
             },
@@ -183,7 +188,7 @@ export default defineConfig(({ mode }) => {
                 tsconfigPath: resolve(__dirname, "tsconfig.json"),
                 outDir,
             }),
-            ...(isWatch ? [] : [trimInternalDts(outDir, ["index", "html-texture", "sprites", "render-target", "mesh", "depth-stencil", "scissor", "dynamic-texture"])]),
+            ...(isWatch ? [] : [trimInternalDts(outDir, ["index", "html-texture", "sprites", "render-target", "mesh", "depth-stencil", "scissor", "dynamic-texture", "text"])]),
             emitPackageJson(outDir),
         ],
     };

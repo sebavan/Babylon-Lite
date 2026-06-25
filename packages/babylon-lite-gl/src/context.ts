@@ -121,15 +121,6 @@ export interface GLEngineContext {
      */
     _effects: GLEffect[];
     /**
-     * Per-engine effect cache keyed by source descriptor (vertex+fragment
-     * source, defines, attribute/uniform/sampler names). `createEffect` returns
-     * (and ref-counts) the cached `GLEffect` when an identical descriptor is
-     * requested, so identical shaders share ONE WebGLProgram — letting
-     * `useEffect`'s current-program cache elide redundant `gl.useProgram`.
-     * @internal
-     */
-    _effectCache: Map<string, GLEffect>;
-    /**
      * Live texture registry — populated by `createRawTexture` /
      * `loadTexture2D` / `createHtmlElementTexture`. Used by the
      * context-restored protocol to replay uploads.
@@ -251,7 +242,6 @@ export function createGLEngine(canvas: HTMLCanvasElement | OffscreenCanvas, opti
         _prevNow: 0,
         _state: createGLState(caps.maxTextureUnits),
         _effects: [],
-        _effectCache: new Map(),
         _textures: [],
         _renderTargets: [],
         _currentRenderTarget: null,
@@ -303,7 +293,6 @@ export function disposeGLEngine(engine: GLEngineContext): void {
         }
     }
     engine._effects.length = 0;
-    engine._effectCache.clear();
     const textures = engine._textures.slice();
     for (const tex of textures) {
         if (!tex._disposed) {

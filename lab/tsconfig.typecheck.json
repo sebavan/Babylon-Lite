@@ -12,7 +12,8 @@
       "babylon-lite-gl/mesh": ["../packages/babylon-lite-gl/src/mesh.ts"],
       "babylon-lite-gl/depth-stencil": ["../packages/babylon-lite-gl/src/depth-stencil.ts"],
       "babylon-lite-gl/scissor": ["../packages/babylon-lite-gl/src/scissor.ts"],
-      "babylon-lite-gl/dynamic-texture": ["../packages/babylon-lite-gl/src/dynamic-texture.ts"]
+      "babylon-lite-gl/dynamic-texture": ["../packages/babylon-lite-gl/src/dynamic-texture.ts"],
+      "babylon-lite-gl/text": ["../packages/babylon-lite-gl/src/text.ts"]
     }
   },
   "include": ["lite/src", "gl/src", "../packages/babylon-lite/src/vite-env.d.ts"]

@@ -722,41 +722,10 @@ interface GLState {
      *  against it. Reset to null on context-lost. */
     boundFramebuffer: WebGLFramebuffer | null;
     viewportX: number; viewportY: number; viewportW: number; viewportH: number;
-
-    // ── Deferred render state (Babylon's applyStates model) ──────────────────
-    // The blend / depth / cull / stencil / colorMask render-state lives in ONE
-    // flat Float64Array(46) instead of ~42 named fields. Slots 0..20 (indexed by
-    // the @internal `RS_*` consts in state.ts) are the ACTUAL applied GL state;
-    // slots 21..41 (`rs[RS_X + RS_DESIRED]`) are the DESIRED twin the setters
-    // write; slots 42..45 are the standalone (no-desired-twin) cached gl.clearColor
-    // RGBA. `applyGLStates` reconciles desired → actual right before each draw /
-    // clear. Unset sentinels (both halves): -1 for the enable/mask toggles (and
-    // colorMask packed), 0 for the factor/func/op enum slots — chosen so a desired
-    // slot that still equals its actual twin never issues a GL call.
-    //
-    // WHY an index-array (not named fields): the deferred state is touched across
-    // state.ts ↔ blend.ts ↔ depth-stencil.ts ↔ apply-states.ts, so esbuild cannot
-    // mangle named properties — each long name (`.dBlendSrcRGB`) would ship
-    // verbatim, many times, in every scene bundle. The `RS_*` consts are plain
-    // integers esbuild inlines (`rs[RS_BLEND_SRC_RGB + RS_DESIRED]` → `rs[22]`),
-    // so the storage costs a single short array access everywhere. Float64 (not
-    // Int32) because stencilMask / stencilFuncMask can be 0xFFFFFFFF, which Int32
-    // stores as -1 — colliding with the -1 unset sentinel.
-    rs: Float64Array;                                // 46 = 21 actual + 21 desired + 4 clearColor
-    /** Raised by any deferred setter; cleared by `applyGLStates`. The flush is a
-     *  fast no-op when false, so a draw that changed no render state pays
-     *  nothing. */
-    statesDirty: boolean;
-    // Per-category reconcilers, installed onto these slots the first time the
-    // matching setter runs (a runtime assignment — NOT a module-level side
-    // effect). `applyGLStates` dispatches ONLY through these slots, so a category
-    // whose setter is absent from a scene tree-shakes its reconciler (and its GL
-    // code) out of the bundle — a clear-only scene drops all four. See §4.2.1.
-    _flushBlend?: (engine: GLEngineContext) => void;
-    _flushDepthCull?: (engine: GLEngineContext) => void;
-    _flushStencil?: (engine: GLEngineContext) => void;
-    _flushColorMask?: (engine: GLEngineContext) => void;
-
+    /** Cached blend mode — a GLBlendMode value, or -1 when unset (no
+     *  gl.enable/disable(BLEND) issued yet). setBlendMode elides redundant
+     *  enable/disable + blendFuncSeparate. Reset to -1 on context-lost. */
+    blendMode: number;
     /** Lazy fullscreen quad — built on first applyEffectWrapper, then reused
      *  for the lifetime of the context. Lives here (not in a module-scoped
      *  WeakMap) to satisfy the zero-side-effects rule. Cleared (set to null)
@@ -766,14 +735,6 @@ interface GLState {
     quadVao: WebGLVertexArrayObject | null;
 }
 ```
-
-> **Eager vs deferred.** Program / texture / buffer / VAO / framebuffer binds,
-> `viewport`, `scissor` and `pixelStorei` are applied EAGERLY on the setter call
-> (eliding only same-value writes). Blend / depth / cull / stencil / colorMask
-> are DEFERRED: their setters only record the desired half of `rs` and raise
-> `statesDirty`; the GL calls happen in `applyGLStates` (§4.2.1). This collapses
-> intra-frame churn (set A → set B → set A with no draw between applies once, as
-> A) and matches Babylon's `Engine.applyStates()`.
 
 ### 4.1.1 GL-state cache invalidation rules
 
@@ -786,14 +747,8 @@ kept in sync with actual GL state. Two protocols enforce that:
   same slot from being elided as a no-op.
 - **Context lost:** the `webglcontextlost` handler sets `_isLost=true` and
   clears the entire `_state` (program=null, boundTextures filled with null,
-  buffers=null, vao=null, boundFramebuffer=null, quad* = null, viewport=0, and
-  the whole `rs` array — BOTH its actual half AND its desired twins — back to the
-  unset sentinels with `statesDirty=false`). Resetting both halves means the
-  first setter after a restore re-marks `statesDirty` and the next
-  `applyGLStates` re-issues from scratch. The `_flush*` reconciler slots are NOT
-  cleared (they are pure function refs; a post-restore setter re-installs the
-  same ref idempotently, and `statesDirty=false` gates the flush until then).
-  Setters become no-ops while `_isLost`. See §4.7.
+  buffers=null, vao=null, boundFramebuffer=null, quad* = null, viewport=0,
+  blendMode=-1). Setters become no-ops while `_isLost`. See §4.7.
 
 ### 4.2 Cache contract — which GL calls are elided
 
@@ -810,7 +765,7 @@ kept in sync with actual GL state. Two protocols enforce that:
 | `gl.bindVertexArray`                     | `_state.boundVao`                      | Same VAO (the shared quad VAO lives forever)      |
 | `gl.bindFramebuffer`                     | `_state.boundFramebuffer`              | Same FBO already bound (`bindRenderTarget`; null = canvas) |
 | `gl.viewport`                            | `_state.viewportX/Y/W/H`               | All four match                                    |
-| blend / depth / cull / stencil / colorMask | `rs` actual slot vs desired twin (§4.2.1) | Deferred — applied by `applyGLStates`, per-slot elided when desired == actual |
+| `gl.enable/disable(BLEND)` + `blendFuncSeparate` | `_state.blendMode`             | Same blend mode already applied (`setBlendMode`)  |
 
 For the typical NeonBrush per-frame pattern (one effect, ~5 uniforms, 1–2 textures), after the first frame every steady-state frame issues exactly:
 
@@ -820,72 +775,6 @@ gl.drawElements(TRIANGLES, 6, UNSIGNED_SHORT, 0)
 ```
 
 — and nothing else. Program, VAO, sampler-uniforms, texture units, viewport are all already correct.
-
-### 4.2.1 Deferred render state — `applyGLStates`
-
-Blend, depth, cull, stencil and colorMask follow Babylon's `applyStates()` model
-rather than applying eagerly. Both the storage and the flush are tuned so an
-unused category costs a scene nothing:
-
-- **Storage — one index-array.** The whole deferred state lives in
-  `_state.rs`, a flat `Float64Array(46)`: slots `0..20` (the `@internal` `RS_*`
-  consts in `state.ts`) are the ACTUAL applied GL state, slots `21..41`
-  (`rs[RS_X + RS_DESIRED]`) the DESIRED twin, and slots `42..45` the standalone
-  cached `gl.clearColor` RGBA. This replaced ~42 named fields
-  (`blendEnabled` / `dBlendEnabled` / …): because the state is read/written across
-  four modules, esbuild could not mangle those property names, so each long name
-  shipped verbatim in every scene bundle. The `RS_*` consts are plain integers
-  esbuild inlines to short literals (`rs[RS_BLEND_SRC_RGB + RS_DESIRED]` →
-  `rs[22]`), reclaiming ~2.4 KB raw per scene. Float64 (not Int32) keeps a
-  `0xFFFFFFFF` stencil mask distinct from the `-1` unset sentinel.
-- **Setters** (`setBlendMode` / `setBlendState` / `disableBlend`, `setDepthState`,
-  `setCullState`, `setStencilState`, `setColorMask`) write ONLY the desired half
-  of `rs` and set `statesDirty = true`. They issue no `gl.*` and never touch the
-  actual half. Omitted setter fields leave their desired slot untouched
-  (merge-from-desired).
-- **Per-category dispatch (tree-shakeable).** `applyGLStates(engine)` (the
-  internal `apply-states.ts`, not exported from the barrel) owns NO reconciliation
-  code — it is a tiny dispatcher. Each category's reconciler (`flushBlend` in
-  blend.ts; `flushDepthCull` / `flushStencil` / `flushColorMask` in
-  depth-stencil.ts) is INSTALLED onto a `_state._flush*` slot the first time its
-  setter runs (a runtime assignment, not a module side effect). `applyGLStates`
-  then just calls whichever slots are populated, in the fixed order
-  blend → depth+cull → stencil → colorMask (reproducing the old monolith's GL
-  call order). Because each reconciler is reachable ONLY through the engine-state
-  slot its setter populates, a scene whose setter is absent tree-shakes that
-  reconciler — and its GL code — out of the bundle: a clear-only scene like
-  `gl-scissor` ships none of the four and `applyGLStates` collapses to four cheap
-  "is it installed?" checks.
-- Each reconciler no-ops when `statesDirty` is false (or the context is
-  lost/disposed — checked once in the dispatcher), otherwise issues only the GL
-  calls whose desired slot differs from its actual twin, copies desired→actual,
-  and the dispatcher clears `statesDirty`. The blend disabled/unset→enabled
-  transition force-issues both `blendEquationSeparate` + `blendFuncSeparate`
-  (Babylon's `AlphaState` does not track them while blending is off); thereafter
-  each is elided independently. The stencil func-triple and op-triple are each
-  issued as a unit.
-- **Flush sites** — `applyGLStates` is called immediately before every GPU op:
-  `drawEffect` (effect-renderer), `renderSprites` (sprites), `drawIndexed` (mesh),
-  and `clearEngine` before `gl.clear` (a clear respects the current write masks).
-
-Net effect: setting the same state every frame applies GL only on the first
-frame (cross-frame elision via the desired→actual compare), and intra-frame
-churn (A→B→A with no draw between) collapses to a single applied state.
-
-### 4.2.2 Effect cache — identical sources share one program
-
-`createEffect` keeps a per-engine `_effectCache: Map<string, GLEffect>` keyed by
-the source descriptor (vertex + fragment source, defines, attribute / uniform /
-sampler names, joined by `\u0000`). A second `createEffect` with an identical
-descriptor returns the SAME `GLEffect` (and its one `WebGLProgram`) and bumps a
-`_refCount` instead of compiling a duplicate program. `disposeEffect` decrements
-`_refCount` and only performs the real teardown (delete program/shaders, splice
-`_effects`, evict the cache entry, clear `currentProgram` if it matched) when the
-count reaches 0. Sharing one program handle is what lets `useEffect`'s
-`currentProgram` cache elide the redundant `gl.useProgram` when several consumers
-(e.g. multiple `createSpriteRenderer`s built from the same shader) render in turn.
-Context-restore is unaffected: each unique effect is registered in `_effects`
-exactly once, so its `_restore` runs once per program.
 
 ### 4.3 Branchless setter shape
 

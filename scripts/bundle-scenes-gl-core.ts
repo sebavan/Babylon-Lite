@@ -10,7 +10,7 @@
  * SOURCE (packages/babylon-lite-gl/src/*.ts) so the measured size reflects the
  * true tree-shaken consumer cost rather than a pre-built barrel.
  */
-import { build } from "esbuild";
+import { build, type Plugin } from "esbuild";
 import { gzipSync } from "zlib";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { resolve } from "path";
@@ -61,12 +61,40 @@ export const liteGlAlias: Record<string, string> = {
     "babylon-lite-gl/depth-stencil": resolve(pkgSrc, "depth-stencil.ts"),
     "babylon-lite-gl/scissor": resolve(pkgSrc, "scissor.ts"),
     "babylon-lite-gl/dynamic-texture": resolve(pkgSrc, "dynamic-texture.ts"),
+    "babylon-lite-gl/text": resolve(pkgSrc, "text.ts"),
 };
 
 /** rawKB / gzipKB rounding identical to the lite bundler's bytesToRoundedKB. */
 export function bytesToRoundedKB(bytes: number): number {
     return Math.round((bytes / 1024) * 10) / 10;
 }
+
+/**
+ * esbuild shim for the Vite-only import features the WebGPU `babylon-lite` SOURCE uses — a GL
+ * scene's parity reference imports it (e.g. `babylon-ref-scene15.ts` → the Slug text renderer the
+ * lite-gl port is diffed against). The lite bundler is Vite-based and handles these natively; the
+ * GL bundler is plain esbuild, so we translate the three the engine source reaches:
+ *   - `?raw`            → inline the target file as a text string (WGSL shader sources)
+ *   - `?url`            → a vendor asset URL (e.g. manifold.wasm); never bundled, mark external
+ *   - `?worker(&inline)`→ an inlined Web Worker; esbuild has no worker pipeline, stub it (size ≈ 0)
+ * No-op for lite-gl scenes and `@babylonjs/core` refs, which use none of these.
+ */
+const viteCompatPlugin: Plugin = {
+    name: "vite-compat",
+    setup(b) {
+        b.onResolve({ filter: /\?raw$/ }, (args) => ({ path: resolve(args.resolveDir, args.path.replace(/\?raw$/, "")), namespace: "vite-raw" }));
+        b.onLoad({ filter: /.*/, namespace: "vite-raw" }, (args) => ({ contents: readFileSync(args.path, "utf8"), loader: "text" }));
+        b.onResolve({ filter: /\?url$/ }, (args) => ({ path: args.path, external: true }));
+        b.onResolve({ filter: /\?worker(&inline)?$/ }, (args) => ({ path: args.path, namespace: "vite-worker" }));
+        b.onLoad({ filter: /.*/, namespace: "vite-worker" }, () => ({ contents: "export default class {}", loader: "js" }));
+    },
+};
+
+/** WebGPU `babylon-lite` vendor runtimes (mirrors the lite bundler's externalized set in
+ *  scripts/bundle-scenes-core.ts `VENDOR_RUNTIMES`): native wasm/worker blobs that are bundle-
+ *  EXEMPT like `text-shaper`. Externalizing them also drops their node-only imports (e.g. manifold
+ *  pulls the `module` builtin). Only reached through a babylon-lite parity ref — no-op otherwise. */
+const VENDOR_EXTERNALS = ["manifold-3d", "manifold-3d/*", "@babylonjs/havok", "@recast-navigation/*"];
 
 /**
  * esbuild a single entry into a standalone, tree-shaken, minified ESM bundle and
@@ -84,6 +112,14 @@ export async function measureBundle(entry: string, alias?: Record<string, string
         target: "esnext",
         platform: "browser",
         legalComments: "none",
+        // `text-shaper` is the upstream vendor shaping blob behind the default text layout. Per
+        // GUIDANCE it is bundle-EXEMPT (the WebGPU lite bundler subtracts it too): the engine/runtime
+        // payload is what's gated, and a caller driving its own layout pays zero for text-shaper. Mark
+        // it external so its bytes are never charged to a scene's ceiling. The VENDOR_EXTERNALS are the
+        // same idea for the WebGPU `babylon-lite` parity ref's native runtimes. esbuild only
+        // externalizes specifiers actually reached, so all are no-ops for scenes that don't import them.
+        external: ["text-shaper", ...VENDOR_EXTERNALS],
+        plugins: [viteCompatPlugin],
         ...(alias ? { alias } : {}),
         write: false,
         logLevel: "warning",
@@ -155,10 +191,7 @@ export async function buildGlBundleManifest(): Promise<void> {
     for (const entry of config) {
         const size = await bundleScene(entry.id);
         manifest[`scene${entry.id}`] = size;
-        const bjs =
-            size.bjsRawKB != null
-                ? ` | BJS ${size.bjsRawKB} KB min / ${size.bjsGzipKB} KB gzip (${(size.bjsGzipKB! / size.gzipKB).toFixed(1)}\u00d7)`
-                : "";
+        const bjs = size.bjsRawKB != null ? ` | BJS ${size.bjsRawKB} KB min / ${size.bjsGzipKB} KB gzip (${(size.bjsGzipKB! / size.gzipKB).toFixed(1)}\u00d7)` : "";
         const ceil = entry.maxRawKB != null ? ` (ceiling ${entry.maxRawKB} KB)` : "";
         console.log(`  scene${entry.id} (${entry.slug}): ${size.rawKB} KB min${ceil} / ${size.gzipKB} KB gzip${bjs}`);
     }

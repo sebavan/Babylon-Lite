@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Babylon Lite GL — Hello Slug (text)</title>
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+    body { display: flex; align-items: center; justify-content: center; }
+    /* Wide canvas (text is a horizontal run). 90vw × 40vh, capped so the buffer stays modest. */
+    canvas { width: 80vw; height: 40vh; display: block; }
+  </style>
+</head>
+<body>
+  <canvas id="renderCanvas"></canvas>
+  <script src="/loader.js"></script>
+  <script type="module" src="/gl/src/demos/text-hello.ts"></script>
+</body>
+</html>
