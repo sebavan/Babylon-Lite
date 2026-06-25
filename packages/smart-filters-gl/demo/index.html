@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>smart-filters-gl — Pixelate demo</title>
+        <style>
+            body {
+                margin: 0;
+                font-family: system-ui, sans-serif;
+                background: #15171c;
+                color: #e6e6e6;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 12px;
+                padding: 20px;
+            }
+            h1 {
+                font-size: 16px;
+                font-weight: 600;
+                margin: 0;
+            }
+            canvas {
+                width: 512px;
+                height: 512px;
+                border-radius: 8px;
+                box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+                background: #000;
+            }
+            .controls {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                font-size: 13px;
+            }
+            #status {
+                font-size: 12px;
+                color: #8a93a2;
+                min-height: 16px;
+            }
+            input[type="range"] {
+                width: 280px;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>smart-filters-gl · Babylon SmartFilter runtime ported to babylon-lite-gl</h1>
+        <canvas id="c" width="512" height="512"></canvas>
+        <div class="controls">
+            <label>Pixelate intensity</label>
+            <input id="intensity" type="range" min="0" max="1" step="0.01" value="0.5" />
+            <span id="val">0.50</span>
+            <label style="margin-left: 16px"><input id="bw" type="checkbox" /> B&amp;W → Pixelate</label>
+        </div>
+        <div id="status">booting…</div>
+        <script type="module" src="./dist/bundle.js"></script>
+    </body>
+</html>
