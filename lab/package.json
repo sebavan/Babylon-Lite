@@ -8,7 +8,9 @@
     "build": "vite build"
   },
   "dependencies": {
-    "babylon-lite": "workspace:*"
+    "babylon-lite": "workspace:*",
+    "babylon-lite-gl": "workspace:*",
+    "babylon-lite-lottie": "workspace:*"
   },
   "devDependencies": {
     "@babylonjs/addons": "^9.5.0",

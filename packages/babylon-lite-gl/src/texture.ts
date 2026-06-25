@@ -1,8 +1,9 @@
 import type { GLEngineContext } from "./context.js";
 
-/** Texture sampling / wrap options. All have GL-spec defaults. Mipmaps are NOT
- *  a create option — generate the chain explicitly via {@link generateTextureMipMaps}. */
+/** Texture sampling / wrap options. All have GL-spec defaults. */
 export interface GLTextureOptions {
+    /** Default: false. */
+    generateMipMaps?: boolean;
     /** Default: false (matches Babylon's default raw-texture behaviour). */
     invertY?: boolean;
     /** Default: gl.LINEAR. */
@@ -91,15 +92,6 @@ export interface GLTexture {
     _dynInvertY?: boolean;
     /** UNPACK_PREMULTIPLY_ALPHA applied when replaying {@link GLTexture._dynSource}. @internal */
     _dynPremultiplyAlpha?: boolean;
-    /**
-     * The `handle` the dynamic texture's `texParameteri` filter/wrap state was
-     * last applied to. `texParameteri` is per-texture GL state that survives pixel
-     * re-uploads, so the dynamic-texture `_upload` re-applies it ONLY when this no
-     * longer matches `handle` — i.e. at creation and after `webglcontextrestored`
-     * installs a fresh handle — not on every per-frame `updateDynamicTexture`.
-     * @internal
-     */
-    _dynParamsHandle?: WebGLTexture | null;
 }
 
 /**
@@ -152,6 +144,7 @@ export function createRawTexture(
     const wrapT = opts.wrapT ?? gl.CLAMP_TO_EDGE;
     const invertY = opts.invertY ?? false;
     const premultiply = opts.premultiplyAlpha ?? false;
+    const generateMipMaps = opts.generateMipMaps ?? false;
     // LDR byte formats are resolved INLINE here; the float-format table in
     // `pickSizedInternalFormat` is deliberately NOT referenced from this path so
     // it tree-shakes out of byte-only bundles. `createFloatTexture` injects its
@@ -175,6 +168,9 @@ export function createRawTexture(
         g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAG_FILTER, magFilter);
         g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_S, wrapS);
         g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_T, wrapT);
+        if (generateMipMaps) {
+            g.generateMipmap(g.TEXTURE_2D);
+        }
     };
 
     const tex: GLTexture = {
@@ -360,6 +356,7 @@ export function loadTexture2D(engine: GLEngineContext, url: string, options?: GL
     const wrapS = opts.wrapS ?? gl.CLAMP_TO_EDGE;
     const wrapT = opts.wrapT ?? gl.CLAMP_TO_EDGE;
     const invertY = opts.invertY ?? false;
+    const generateMipMaps = opts.generateMipMaps ?? false;
 
     let bitmap: ImageBitmap | null = null;
     const placeholderPixels = new Uint8Array([0, 0, 0, 0]);
@@ -373,6 +370,9 @@ export function loadTexture2D(engine: GLEngineContext, url: string, options?: GL
         bindTextureForUpload(target, tex.handle);
         if (bitmap !== null) {
             g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, g.RGBA, g.UNSIGNED_BYTE, bitmap);
+            if (generateMipMaps) {
+                g.generateMipmap(g.TEXTURE_2D);
+            }
             tex.width = bitmap.width;
             tex.height = bitmap.height;
         } else {

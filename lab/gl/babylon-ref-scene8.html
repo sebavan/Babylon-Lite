@@ -2,14 +2,17 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Babylon.js Reference — GL Scene 8: Render-to-Texture Round-Trip</title>
+  <title>Babylon Ref — Scene 8: Lottie Player (@babylonjs/core)</title>
   <style>
-    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
-    canvas { width: 100%; height: 100%; display: block; }
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0b0f12; }
+    body { display: flex; align-items: center; justify-content: center; font-family: system-ui, sans-serif; }
+    #lottie-container { width: 360px; height: 360px; }
+    #label { position: fixed; left: 12px; bottom: 10px; color: #6b7c84; font-size: 12px; }
   </style>
 </head>
 <body>
-  <canvas id="renderCanvas"></canvas>
+  <div id="lottie-container"></div>
+  <div id="label">Babylon.js lottiePlayer (@babylonjs/core) — parity reference</div>
   <script type="module" src="/gl/src/babylon-ref-scene8.ts"></script>
 </body>
 </html>

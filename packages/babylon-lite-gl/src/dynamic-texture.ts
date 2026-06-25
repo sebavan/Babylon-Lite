@@ -8,9 +8,10 @@
  * The WebGL counterpart of Babylon's `ThinEngine.createDynamicTexture` +
  * `updateDynamicTexture`. A dynamic texture is a blank RGBA8 allocation whose
  * pixels are pushed on demand from a canvas / `OffscreenCanvas` / image / video
- * / `ImageBitmap` / `ImageData` source. The most recent source is retained
- * internally and replayed into the fresh handle on `webglcontextrestored` by the
- * engine's standard context-restore protocol.
+ * / `ImageBitmap` / `ImageData` source. The most recent source is retained on
+ * the texture (`_dynSource`) and replayed into the fresh handle on
+ * `webglcontextrestored` — the texture is registered in the engine's `_textures`
+ * registry, so the standard context-restore protocol replays it.
  */
 import { bindTextureForUpload, setUnpackState, type GLTexture, type GLTextureOptions } from "./texture.js";
 import type { GLEngineContext } from "./context.js";
@@ -31,11 +32,9 @@ import type { GLEngineContext } from "./context.js";
  *  @param engine - The engine to create GL resources on.
  *  @param width - Texture width in texels (clamped to ≥ 1).
  *  @param height - Texture height in texels (clamped to ≥ 1).
- *  @param options - Optional sampling/wrap config (see {@link GLTextureOptions})
- *    plus this factory's own `generateMipMaps` flag (mipmaps are built after an
- *    update when a source is present; defaults to `false`).
+ *  @param options - Optional sampling/wrap/mipmap config (see {@link GLTextureOptions}).
  *  @returns The new {@link GLTexture}. */
-export function createDynamicTexture(engine: GLEngineContext, width: number, height: number, options?: GLTextureOptions & { generateMipMaps?: boolean }): GLTexture {
+export function createDynamicTexture(engine: GLEngineContext, width: number, height: number, options?: GLTextureOptions): GLTexture {
     const gl = engine.gl;
     const handle = gl.createTexture();
     if (handle === null) {
@@ -51,11 +50,9 @@ export function createDynamicTexture(engine: GLEngineContext, width: number, hei
     const generateMipMaps = opts.generateMipMaps ?? false;
 
     // Single `_upload` closure used for both the initial allocation AND every
-    // `webglcontextrestored` replay AND every `updateDynamicTexture`. The pixel
-    // upload runs every time; the four `texParameteri` calls run ONLY when the
-    // handle changed (initial create + restore install a fresh, GL-default
-    // handle) — a per-frame pixel update keeps the same handle, whose filter/wrap
-    // GL retains, so re-applying them would be a pure redundant cost.
+    // `webglcontextrestored` replay: uploads the captured dynamic source when
+    // present, otherwise re-blanks the allocation. Texture params are re-applied
+    // each time because a restored handle starts with GL defaults.
     const upload = (target: GLEngineContext): void => {
         const g = target.gl;
         bindTextureForUpload(target, tex.handle);
@@ -67,13 +64,10 @@ export function createDynamicTexture(engine: GLEngineContext, width: number, hei
             setUnpackState(target, false, false);
             g.texImage2D(g.TEXTURE_2D, 0, g.RGBA8, w, h, 0, g.RGBA, g.UNSIGNED_BYTE, null);
         }
-        if (tex._dynParamsHandle !== tex.handle) {
-            g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MIN_FILTER, minFilter);
-            g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAG_FILTER, magFilter);
-            g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_S, wrapS);
-            g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_T, wrapT);
-            tex._dynParamsHandle = tex.handle;
-        }
+        g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MIN_FILTER, minFilter);
+        g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAG_FILTER, magFilter);
+        g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_S, wrapS);
+        g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_T, wrapT);
         if (generateMipMaps && src !== null && src !== undefined) {
             g.generateMipmap(g.TEXTURE_2D);
         }

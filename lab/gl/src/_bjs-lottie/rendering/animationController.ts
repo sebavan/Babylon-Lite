@@ -1,0 +1,475 @@
+// @ts-nocheck -- vendored Babylon.js lottiePlayer reference (parity baseline); not maintained here
+import "./babylonSideEffects";
+
+import { type RawLottieAnimation } from "../parsing/rawTypes";
+import { type AnimationInfo } from "../parsing/parsedTypes";
+import { ResetNode, UpdateNode, type AnimationNode } from "../nodes/node";
+import { type LottieFeatureSet } from "../features/feature";
+import {
+    type AnimationConfiguration,
+    type LottieFeatureConfig,
+    type LottieRendererConfig,
+    ResolveFeatureConfiguration,
+    ResolveRendererConfiguration,
+} from "../animationConfiguration";
+
+import { ThinEngine } from "@babylonjs/core/Engines/thinEngine";
+import { Viewport } from "@babylonjs/core/Maths/math.viewport";
+import { RenderingManager } from "./renderingManager";
+import { ThinMatrix } from "../maths/matrix";
+import { SpritePacker } from "../parsing/spritePacker";
+import { LoadLottieFeatures } from "../load/loadFeatures";
+import { ParseAnimation, ParseAnimationAsync } from "../load/parseAnimation";
+
+/**
+ * Defines the babylon combine alpha value to prevent a large import.
+ */
+const ALPHA_PREMULTIPLIED = 7;
+
+type AnimationControllerOptions = {
+    loadedFeatures?: LottieFeatureSet;
+    skipInitialParse?: boolean;
+};
+
+/**
+ * Class that controls the playing of lottie animations using Babylon.js
+ */
+export class AnimationController {
+    private _isReady: boolean;
+
+    private readonly _canvas: HTMLCanvasElement | OffscreenCanvas;
+    private _canvasScale: number;
+    private readonly _atlasScale: number;
+    private readonly _variables: Map<string, string>;
+    private _featureConfiguration: LottieFeatureConfig;
+    private _rendererConfiguration: LottieRendererConfig;
+    private readonly _engine: ThinEngine;
+    private readonly _spritePacker: SpritePacker;
+
+    private _animation?: AnimationInfo;
+
+    private readonly _viewport: Viewport;
+    private readonly _projectionMatrix: ThinMatrix;
+    private readonly _worldMatrix: ThinMatrix;
+
+    private _firstRun: boolean;
+    private _frameDuration: number;
+    private _currentFrame: number;
+    private _isPlaying: boolean;
+    private _animationFrameId: number | null;
+    private _lastFrameTime: number;
+    private _deltaTime: number;
+    private _loop: boolean;
+    private _hasRendered: boolean;
+
+    private _accumulatedTime: number;
+    private _framesToAdvance: number;
+
+    private readonly _renderingManager: RenderingManager;
+    private readonly _onFirstRender?: () => void;
+
+    /**
+     * Gets the canvas used for rendering the animation.
+     * @returns The canvas element used for rendering.
+     */
+    public get view(): HTMLCanvasElement {
+        return this._engine.getRenderingCanvas()!;
+    }
+
+    /**
+     * Gets the height of the animation in pixels.
+     * @returns The height of the animation in pixels.
+     */
+    public get animationHeight(): number {
+        return this._animation ? this._animation.heightPx : 0;
+    }
+
+    /**
+     * Gets the width of the animation in pixels.
+     * @returns The width of the animation in pixels.
+     */
+    public get animationWidth(): number {
+        return this._animation ? this._animation.widthPx : 0;
+    }
+
+    /**
+     * Creates and initializes a new animation controller using runtime feature detection and loading.
+     * @param canvas The canvas element to render the animation on.
+     * @param animationData The raw lottie animation as a JSON object.
+     * @param canvasScale The scale factor for the canvas / viewport (may be \< 1 when the animation is larger than the container).
+     * @param atlasScale The scale factor for the sprite atlas (always \>= 1 to keep sprites crisp).
+     * @param variables Map of variables to replace in the animation file.
+     * @param configuration The partial configuration for the animation player. Will be finalized after engine creation.
+     * @param mainThreadDevicePixelRatio The devicePixelRatio from the main thread (used in worker scenarios).
+     * @param onFirstRender Optional callback invoked after the first frame renders.
+     * @returns Initialized animation controller.
+     */
+    public static async CreateAsync(
+        canvas: HTMLCanvasElement | OffscreenCanvas,
+        animationData: RawLottieAnimation,
+        canvasScale: number,
+        atlasScale: number,
+        variables: Map<string, string>,
+        configuration: Partial<AnimationConfiguration>,
+        mainThreadDevicePixelRatio?: number,
+        onFirstRender?: () => void
+    ): Promise<AnimationController> {
+        const controller = new AnimationController(canvas, animationData, canvasScale, atlasScale, variables, configuration, mainThreadDevicePixelRatio, onFirstRender, {
+            skipInitialParse: true,
+        });
+
+        try {
+            const loadedFeatures = await LoadLottieFeatures(animationData, controller._featureConfiguration);
+            const animationInfo = await ParseAnimationAsync(animationData, loadedFeatures, controller._featureConfiguration, controller._rendererConfiguration, {
+                packer: controller._spritePacker,
+                renderingManager: controller._renderingManager,
+            });
+            controller._applyAnimationInfo(animationData, animationInfo);
+        } catch (error: unknown) {
+            controller.dispose();
+            throw error;
+        }
+
+        return controller;
+    }
+
+    /**
+     * Creates a new instance of the Player.
+     * @param canvas The canvas element to render the animation on.
+     * @param animationData The raw lottie animation as a JSON object.
+     * @param canvasScale The scale factor for the canvas / viewport (may be \< 1 when the animation is larger than the container).
+     * @param atlasScale The scale factor for the sprite atlas (always \>= 1 to keep sprites crisp).
+     * @param variables Map of variables to replace in the animation file.
+     * @param configuration The partial configuration for the animation player. Will be finalized after engine creation.
+     * @param mainThreadDevicePixelRatio The devicePixelRatio from the main thread (used in worker scenarios).
+     * @param onFirstRender Optional callback invoked after the first frame renders.
+     * @param options Optional parser-control options used by async feature-loading paths.
+     */
+    public constructor(
+        canvas: HTMLCanvasElement | OffscreenCanvas,
+        animationData: RawLottieAnimation,
+        canvasScale: number,
+        atlasScale: number,
+        variables: Map<string, string>,
+        configuration: Partial<AnimationConfiguration>,
+        mainThreadDevicePixelRatio?: number,
+        onFirstRender?: () => void,
+        options?: AnimationControllerOptions
+    ) {
+        this._isReady = false;
+        this._canvas = canvas;
+        this._canvasScale = canvasScale;
+        this._atlasScale = atlasScale;
+        this._variables = variables;
+        this._currentFrame = 0;
+        this._isPlaying = false;
+        this._animationFrameId = null;
+        this._lastFrameTime = 0;
+        this._deltaTime = 0;
+        this._accumulatedTime = 0;
+        this._framesToAdvance = 0;
+        this._frameDuration = 1000 / 30; // Default to 30 FPS
+        this._firstRun = true;
+        this._hasRendered = false;
+        this._onFirstRender = onFirstRender;
+
+        this._featureConfiguration = ResolveFeatureConfiguration(configuration);
+        this._loop = this._featureConfiguration.loopAnimation;
+
+        this._engine = new ThinEngine(
+            this._canvas,
+            false, // Antialias
+            {
+                alpha: true,
+                stencil: false,
+                antialias: false,
+                audioEngine: false,
+                depth: false,
+                // Important to allow skip frame and tiled optimizations
+                preserveDrawingBuffer: false,
+                premultipliedAlpha: true, // Using premultiplied alpha to avoid issues with colors bleeding in the texture atlas
+                doNotHandleContextLost: !this._featureConfiguration.supportDeviceLost,
+                // Useful during debug to simulate WebGL1 devices (Safari)
+                // disableWebGL2Support: true,
+            },
+            false
+        );
+
+        // Finalize configuration now that we can query GPU capabilities
+        const maxTextureSize = this._engine.getCaps().maxTextureSize;
+        this._rendererConfiguration = ResolveRendererConfiguration(configuration, maxTextureSize, mainThreadDevicePixelRatio);
+
+        // Prevent parallel shader compilation to simplify the boot sequence
+        // Only a couple of fast compile shaders.
+        this._engine.getCaps().parallelShaderCompile = undefined;
+        this._engine.depthCullingState.depthTest = false;
+        this._engine.stencilState.stencilTest = false;
+        this._engine.setAlphaMode(ALPHA_PREMULTIPLIED);
+
+        this._spritePacker = new SpritePacker(this._engine, this._isHtmlCanvas(canvas), this._atlasScale, this._variables, this._rendererConfiguration);
+        this._renderingManager = new RenderingManager(this._engine, this._rendererConfiguration);
+
+        this._projectionMatrix = new ThinMatrix();
+        this._worldMatrix = new ThinMatrix();
+        this._worldMatrix.identity();
+
+        this._viewport = new Viewport(0, 0, 1, 1);
+
+        if (!options?.skipInitialParse) {
+            const animationInfo = ParseAnimation(animationData, options?.loadedFeatures, this._featureConfiguration, this._rendererConfiguration, {
+                packer: this._spritePacker,
+                renderingManager: this._renderingManager,
+            });
+            this._applyAnimationInfo(animationData, animationInfo);
+        }
+    }
+
+    private _applyAnimationInfo(animationData: RawLottieAnimation, animationInfo: AnimationInfo): void {
+        this._animation = animationInfo;
+        this._frameDuration = 1000 / this._animation.frameRate;
+
+        this._cleanTree(this._animation.nodes);
+        this._setSize(animationData.w, animationData.h, this._canvasScale);
+
+        this._isReady = true;
+    }
+
+    /**
+     * Plays the animation.
+     */
+    public playAnimation(): void {
+        if (this._animation === undefined || !this._isReady) {
+            return;
+        }
+
+        this._currentFrame = 0;
+        this._accumulatedTime = 0;
+        this._framesToAdvance = 0;
+        this._isPlaying = true;
+        this._lastFrameTime = 0;
+
+        // Start the render loop
+        this._startRenderLoop();
+    }
+
+    /**
+     * Stops the animation playback.
+     */
+    public stopAnimation(): void {
+        this._accumulatedTime = 0;
+        this._framesToAdvance = 0;
+        this._isPlaying = false;
+        if (this._animationFrameId !== null) {
+            cancelAnimationFrame(this._animationFrameId);
+            this._animationFrameId = null;
+        }
+    }
+
+    /**
+     * Sets a new canvas scale factor for the animation and updates the rendering size.
+     * This only affects the canvas/viewport size, not the sprite atlas.
+     * @param canvasScale The new canvas scale factor to apply to the animation.
+     */
+    public setScale(canvasScale: number): void {
+        if (canvasScale <= 0 || this._animation === undefined) {
+            return;
+        }
+
+        this._canvasScale = canvasScale;
+        this._setSize(this._animation.widthPx, this._animation.heightPx, this._canvasScale);
+    }
+
+    /**
+     * Disposes the player and releases all resources.
+     */
+    public dispose(): void {
+        this.stopAnimation();
+
+        // Offscreen canvas do not have .remove() as it doesn't inherit from Element
+        const canvas = this._engine.getRenderingCanvas();
+        if (canvas && canvas.remove) {
+            canvas.remove();
+        }
+
+        this._engine.dispose();
+        this._renderingManager.dispose();
+        for (const texture of this._spritePacker.textures) {
+            texture.dispose();
+        }
+    }
+
+    /**
+     * Sets the rendering size for the engine.
+     *
+     * The engine back-buffer is sized to the canvas (width * canvasScale * dpr),
+     * but the orthographic projection maps the coordinate space so that sprites
+     * rasterised at `atlasScale` in the atlas are correctly placed in the
+     * `canvasScale`-sized viewport.
+     *
+     * @param width Width of the rendering canvas
+     * @param height Height of the rendering canvas
+     * @param canvasScale Canvas scale ratio between the container and the animation
+     */
+    private _setSize(width: number, height: number, canvasScale: number): void {
+        const { _engine, _projectionMatrix, _worldMatrix } = this;
+        const devicePixelRatio = this._rendererConfiguration.devicePixelRatio;
+
+        _engine.setSize(width * canvasScale * devicePixelRatio, height * canvasScale * devicePixelRatio);
+
+        const world = _worldMatrix.asArray();
+        world[5] = -1; // we are upside down with Lottie
+
+        // The projection always maps the full animation coordinate space [0, width] × [0, height]
+        // into the canvas. Dividing by canvasScale cancels it out from
+        // the engine resolution, so sprites positioned in animation-space render correctly
+        // regardless of whether the canvas is smaller or larger than the animation.
+        _projectionMatrix.orthoOffCenterLeftHanded(
+            0,
+            _engine.getRenderWidth() / (devicePixelRatio * canvasScale),
+            _engine.getRenderHeight() / (devicePixelRatio * canvasScale),
+            0,
+            -100,
+            100
+        );
+
+        // If we are not playing anymore (animation finished), resizing clears the buffer.
+        // Redraw the last frame so the canvas does not appear blank after a resize.
+        if (!this._isPlaying && this._animation) {
+            this._engine.setViewport(this._viewport);
+            this._renderingManager.render(this._worldMatrix, this._projectionMatrix);
+        }
+    }
+
+    private _isHtmlCanvas(canvas: HTMLCanvasElement | OffscreenCanvas): boolean {
+        return typeof HTMLCanvasElement !== "undefined" && canvas instanceof HTMLCanvasElement;
+    }
+
+    private _cleanTree(nodes: AnimationNode[]): void {
+        // Remove non shape nodes
+        for (let i = 0; i < nodes.length; i++) {
+            const node = nodes[i];
+            if (node.children.length === 0 && !node.isShape) {
+                nodes.splice(i, 1);
+                i--;
+                continue;
+            }
+
+            this._cleanTree(node.children);
+        }
+    }
+
+    private _startRenderLoop(): void {
+        if (!this._isPlaying) {
+            return;
+        }
+
+        this._animationFrameId = requestAnimationFrame((currentTime) => {
+            // The first time we render, we set the last frame time
+            // to the current time to sync with the page startup time
+            if (this._firstRun) {
+                this._lastFrameTime = currentTime;
+                this._firstRun = false;
+            }
+
+            this._deltaTime = currentTime - this._lastFrameTime;
+            this._lastFrameTime = currentTime;
+
+            this._render();
+            this._lastFrameTime = performance.now();
+
+            // Continue the loop if still playing
+            if (this._isPlaying) {
+                this._startRenderLoop();
+            }
+        });
+    }
+
+    private _render(): void {
+        if (!this._animation || !this._isPlaying) {
+            return;
+        }
+
+        this._engine.setViewport(this._viewport);
+
+        // Calculate the new frame based on time
+        this._accumulatedTime += this._deltaTime;
+        this._framesToAdvance = Math.floor(this._accumulatedTime / this._frameDuration);
+
+        if (this._framesToAdvance <= 0) {
+            return;
+        }
+
+        this._accumulatedTime -= this._framesToAdvance * this._frameDuration;
+
+        this._currentFrame += this._framesToAdvance;
+
+        if (this._currentFrame < this._animation.startFrame) {
+            return;
+        }
+
+        let stoppingAfterThisFrame = false;
+        const effectiveEndFrame =
+            this._featureConfiguration.stopAtFrame !== undefined ? Math.min(this._featureConfiguration.stopAtFrame, this._animation.endFrame) : this._animation.endFrame;
+        // Lottie out-point (op) is exclusive — the last visible frame is op - 1
+        const lastVisibleFrame = this._featureConfiguration.stopAtFrame !== undefined ? effectiveEndFrame : effectiveEndFrame - 1;
+
+        if (this._currentFrame > lastVisibleFrame) {
+            if (this._loop && this._featureConfiguration.stopAtFrame === undefined) {
+                this._currentFrame = (this._currentFrame % (this._animation.endFrame - this._animation.startFrame)) + this._animation.startFrame;
+                for (let i = 0; i < this._animation.nodes.length; i++) {
+                    ResetNode(this._animation.nodes[i]);
+                }
+            } else {
+                // When not looping, clamp to the last visible frame
+                this._currentFrame = lastVisibleFrame;
+                stoppingAfterThisFrame = true;
+            }
+        }
+
+        for (let i = 0; i < this._animation.nodes.length; i++) {
+            UpdateNode(this._animation.nodes[i], this._currentFrame);
+        }
+
+        // Render all layers of the animation
+        this._renderingManager.render(this._worldMatrix, this._projectionMatrix);
+
+        if (!this._hasRendered) {
+            this._hasRendered = true;
+            this._onFirstRender?.();
+        }
+
+        if (stoppingAfterThisFrame) {
+            if (this._featureConfiguration.stopAtFrame === undefined) {
+                this._isPlaying = false;
+            }
+            // When stopAtFrame is set, the render loop stays alive to prevent
+            // preserveDrawingBuffer:false from clearing the canvas.
+        }
+    }
+
+    /** Vendored-for-parity: deterministic single-frame render (mirrors the
+     *  lite player's AnimationController.renderFrame). */
+    public get hasRendered(): boolean {
+        return this._hasRendered;
+    }
+
+    /** Vendored-for-parity: render exactly `frame` without advancing the wall
+     *  clock, so the Babylon reference captures the identical frame the lite
+     *  scene freezes at. */
+    public renderFrame(frame: number): void {
+        if (this._animation === undefined || !this._isReady) {
+            return;
+        }
+        const clamped = Math.max(this._animation.startFrame, Math.min(frame, this._animation.endFrame));
+        this._currentFrame = clamped;
+        this._engine.setViewport(this._viewport);
+        for (let i = 0; i < this._animation.nodes.length; i++) {
+            UpdateNode(this._animation.nodes[i], clamped);
+        }
+        this._renderingManager.render(this._worldMatrix, this._projectionMatrix);
+        if (!this._hasRendered) {
+            this._hasRendered = true;
+            this._onFirstRender?.();
+        }
+    }
+}

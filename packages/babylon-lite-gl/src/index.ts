@@ -98,21 +98,8 @@ export {
 export type { GLRenderTarget, GLRenderTargetOptions, GLFloatRenderTargetOptions, GLPingPong } from "./render-target.js";
 
 // ─── Meshes / buffers / instancing (also at `@babylonjs/lite-gl/mesh`) ──
-export {
-    createVertexBuffer,
-    updateVertexBuffer,
-    createIndexBuffer,
-    disposeBuffer,
-    bindIndexBuffer,
-    bindAttributes,
-    unbindInstanceAttributes,
-    drawIndexed,
-    createMeshVao,
-    bindMeshVao,
-    drawMesh,
-    disposeMeshVao,
-} from "./mesh.js";
-export type { GLVertexBuffer, GLIndexBuffer, GLAttributeDescriptor, GLMeshVertexBuffer, GLMeshVao } from "./mesh.js";
+export { createVertexBuffer, updateVertexBuffer, createIndexBuffer, disposeBuffer, bindIndexBuffer, bindAttributes, unbindInstanceAttributes, drawIndexed } from "./mesh.js";
+export type { GLVertexBuffer, GLIndexBuffer, GLAttributeDescriptor } from "./mesh.js";
 
 // ─── Blend modes ─────────────────────────────────────────────────────
 // GLBlendMode / GLBlendEquation are const + same-name type; one value
@@ -121,7 +108,7 @@ export { GLBlendMode, GLBlendEquation, setBlendMode, setBlendState, disableBlend
 export type { GLBlendState } from "./blend.js";
 
 // ─── Depth / stencil / color-mask / clear ────────────────────────────
-export { setDepthState, setCullState, setStencilState, setColorMask, clearEngine, generateRenderTargetStencil } from "./depth-stencil.js";
+export { setDepthState, setCullState, setStencilState, setColorMask, clearEngine } from "./depth-stencil.js";
 export type { GLDepthState, GLStencilState, GLClearOptions } from "./depth-stencil.js";
 
 // ─── Scissor ─────────────────────────────────────────────────────────

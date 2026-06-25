@@ -117,10 +117,6 @@ describe("babylon-lite-gl build output", () => {
             "disposeBuffer",
             "bindAttributes",
             "drawIndexed",
-            "createMeshVao",
-            "bindMeshVao",
-            "drawMesh",
-            "disposeMeshVao",
             // blend / depth-stencil / scissor
             "setBlendMode",
             "setBlendState",
@@ -130,7 +126,6 @@ describe("babylon-lite-gl build output", () => {
             "setStencilState",
             "setColorMask",
             "clearEngine",
-            "generateRenderTargetStencil",
             "setScissor",
             "disableScissor",
         ]) {
@@ -187,17 +182,13 @@ describe("babylon-lite-gl build output", () => {
             "bindAttributes",
             "unbindInstanceAttributes",
             "drawIndexed",
-            "createMeshVao",
-            "bindMeshVao",
-            "drawMesh",
-            "disposeMeshVao",
         ]) {
             expect(typeof mesh[name], `mesh export ${name}`).toBe("function");
         }
 
         // ── /depth-stencil sub-entry ────────────────────────────────────────
         const depthStencil = (await import(pathToFileURL(resolve(DIST, "depth-stencil.js")).href)) as Record<string, unknown>;
-        for (const name of ["setDepthState", "setCullState", "setStencilState", "setColorMask", "clearEngine", "generateRenderTargetStencil"]) {
+        for (const name of ["setDepthState", "setCullState", "setStencilState", "setColorMask", "clearEngine"]) {
             expect(typeof depthStencil[name], `depth-stencil export ${name}`).toBe("function");
         }
 

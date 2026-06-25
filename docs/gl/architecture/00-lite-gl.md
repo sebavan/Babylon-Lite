@@ -42,7 +42,7 @@ Non-goals:
 
 - No WebGL1 path.
 - No scene graph, no materials, no meshes, no skinning, no PBR.
-- Render-to-texture is available via the `/render-target` sub-entry (§3.8): RGBA8 (or a bring-your-own `colorTexture`, e.g. a float/half-float HDR target), optional core depth, opt-in stencil (`generateRenderTargetStencil`, /depth-stencil) and mipmap (`generateRenderTargetMipMaps`) helpers, ping-pong feedback and `readPixels` readback. No MRT (multiple render targets). Core effects render to the canvas by default.
+- Render-to-texture is available via the `/render-target` sub-entry: RGBA8 (or a bring-your-own `colorTexture`, e.g. a float/half-float HDR target), optional depth/stencil, mipmaps, ping-pong feedback and `readPixels` readback. No MRT (multiple render targets). Core effects render to the canvas by default.
 - No `SpriteRenderer` / `ThinSprite` in v1 (deferred; the magic loading screen keeps stock Babylon until v2).
 - No runtime shader preprocessor (`attribute`→`in` etc.). Consumers ship GLSL ES 3.00.
 - No shader-store, no `#include`, no observables, no engine-level customization extension points.
@@ -324,6 +324,8 @@ export function setEffectTexture(engine: GLEngineContext, effect: GLEffect, samp
 
 ```ts
 export interface GLTextureOptions {
+    /** Default: false. */
+    generateMipMaps?: boolean;
     /** Default: false (matches Babylon's default raw-texture behaviour). */
     invertY?: boolean;
     /** WebGL2 sampling mode. Default: gl.LINEAR (mip: NEAREST). Pass gl.NEAREST for nearest. */
@@ -389,11 +391,6 @@ export function bindTexture(engine: GLEngineContext, unit: number, tex: GLTextur
  *  handle (so a later `bindTexture(..., otherTex)` to the same unit is NOT
  *  incorrectly elided). Removes the texture from `engine._textures`. */
 export function disposeTexture(engine: GLEngineContext, tex: GLTexture): void;
-
-/** Build a full mip chain for `tex` (a single `gl.generateMipmap`). Mipmaps are
- *  a **function**, not a create-option: `GLTextureOptions` has no
- *  `generateMipMaps` flag. No-op when `tex._disposed` or `engine._isLost`. */
-export function generateTextureMipMaps(engine: GLEngineContext, tex: GLTexture): void;
 ```
 
 #### 3.4.1 Sub-entry: HTML element textures (`/html-texture`)
@@ -468,9 +465,10 @@ export function setViewport(engine: GLEngineContext, viewport?: GLViewport): voi
  *  currently-bound program, and the setters intentionally do NOT call
  *  `useEffect` themselves (keeping the hot path a single equality check).
  *
- *  No depth/stencil state changes: NeonBrush effects never enable them, and
- *  `createGLEngine` requested `depth: false, stencil: false`. If a future
- *  consumer needs depth, add a separate `setDepthTest(engine, on)` cached export. */
+ *  No depth/stencil state changes: NeonBrush fullscreen effects never enable them,
+ *  and `createGLEngine` requested `depth: false, stencil: false`. Consumers that
+ *  need depth / stencil / cull state use the shipped `/depth-stencil` setters
+ *  (`setDepthState` / `setStencilState` / `setCullState`). */
 export function applyEffectWrapper(wrapper: GLEffectWrapper): void;
 
 /** `gl.drawElements(TRIANGLES, 6, UNSIGNED_SHORT, 0)`. No-op when `engine._isLost`
@@ -619,91 +617,6 @@ export { createRenderTarget, bindRenderTarget, resizeRenderTarget, disposeRender
 
 ---
 
-### 3.8 Render targets (sub-entry `/render-target`)
-
-Dynamic-importable (like `/sprites` and `/html-texture`) so a consumer that never
-renders to a texture doesn't pull the FBO code into its bundle. This is the lite-gl
-equivalent of Babylon's `RenderTargetTexture` / `createRenderTargetTexture` +
-`bindFramebuffer`. A `GLRenderTarget` owns an FBO plus a sampleable color
-`GLTexture` (and an optional `DEPTH_COMPONENT16` renderbuffer); a `GLPingPong`
-pairs two same-sized targets for self-feedback effects (sample last frame → render
-this frame → `swap`).
-
-```ts
-export interface GLRenderTargetOptions {
-    width: number;                 // positive integer (texels)
-    height: number;                // positive integer (texels)
-    generateDepthBuffer?: boolean; // default false; allocates a DEPTH_COMPONENT16 renderbuffer
-    minFilter?: GLenum;            // default gl.LINEAR
-    magFilter?: GLenum;            // default gl.LINEAR
-    wrapS?: GLenum;                // default gl.CLAMP_TO_EDGE
-    wrapT?: GLenum;                // default gl.CLAMP_TO_EDGE
-    colorTexture?: GLTexture;        // BYO color attachment (e.g. a createFloatTexture HDR target); else RGBA8
-    // No generateStencilBuffer/generateMipMaps here: stencil is the opt-in
-    // generateRenderTargetStencil (/depth-stencil) helper; mipmaps are the
-    // generateRenderTargetMipMaps function (both tree-shake out of the core).
-}
-
-export interface GLRenderTarget { readonly texture: GLTexture; width: number; height: number; /* + @internal FBO/depth/restore */ }
-export interface GLPingPong     { readonly read: GLRenderTarget; readonly write: GLRenderTarget; swap(): void; /* + @internal _a/_b */ }
-
-// Engine-first params everywhere; GL-prefixed, Options-suffixed type names (lite-gl convention).
-export function createRenderTarget(engine: GLEngineContext, options: GLRenderTargetOptions): GLRenderTarget;
-export function bindRenderTarget(engine: GLEngineContext, rt: GLRenderTarget | null): void;
-export function resizeRenderTarget(engine: GLEngineContext, rt: GLRenderTarget, width: number, height: number): void;
-export function disposeRenderTarget(engine: GLEngineContext, rt: GLRenderTarget | null | undefined): void;
-export function createFloatRenderTarget(engine: GLEngineContext, options: GLFloatRenderTargetOptions): GLRenderTarget; // float / half-float HDR color
-export function generateRenderTargetMipMaps(engine: GLEngineContext, rt: GLRenderTarget): void;
-// Stencil is opt-in from the /depth-stencil sub-entry (NOT a createRenderTarget option),
-// so the packed-renderbuffer code tree-shakes out of the render-target core:
-//   generateRenderTargetStencil(engine, rt, { depth? }): void
-//     packs DEPTH24_STENCIL8 (depth default true) or stencil-only STENCIL_INDEX8 (depth:false),
-//     replacing the core depth-only buffer; installs a restore/resize hook so it survives FBO rebuilds.
-export function readRenderTargetPixels(engine: GLEngineContext, rt: GLRenderTarget, x: number, y: number, w: number, h: number, into?: ArrayBufferView): ArrayBufferView; // GPU→CPU readback
-export function createPingPong(engine: GLEngineContext, options: GLRenderTargetOptions): GLPingPong;
-export function resizePingPong(engine: GLEngineContext, pp: GLPingPong, width: number, height: number): void;
-export function disposePingPong(engine: GLEngineContext, pp: GLPingPong | null | undefined): void;
-```
-
-- **`createRenderTarget`** allocates the FBO + an engine-registered color texture
-  (+ optional depth). It is failure-atomic: on a bad size, a null GL handle, or an
-  incomplete framebuffer it frees the color texture and any partial FBO/renderbuffer
-  (and restores the previously-bound framebuffer) before throwing, so a failed create
-  leaks nothing.
-- **`bindRenderTarget`** is the cached framebuffer bind — the analogue of Babylon's
-  `bindFramebuffer`. It sets `_state.boundFramebuffer` (§4.1 / §4.2) and the viewport
-  to the target size; `rt = null` binds the default framebuffer (the canvas) and the
-  canvas viewport. It no-ops on a lost/disposed context or a disposed target.
-- **`resizeRenderTarget`** reallocates color (+ depth + FBO) at the new size while
-  preserving object identity. If the target is the currently-bound one it is re-bound
-  (with the new-size viewport) after the rebuild, because deleting a bound FBO reverts
-  GL to framebuffer 0 — without the re-bind an in-flight pass would silently start
-  drawing to the canvas.
-- **`disposeRenderTarget` / `disposePingPong`** delete every GL resource, unhook the
-  restore handler, and are idempotent — and a no-op for `null` / `undefined`, matching
-  the WebGPU `@babylonjs/lite` `disposeRenderTarget`.
-- **Context restore.** A default (owned) RGBA8 color texture is owned, rebuilt and
-  deleted by the render target itself: each target registers its OWN
-  `onContextRestored` hook that re-creates the FBO + depth and the color texture.
-  A bring-your-own `colorTexture` is instead engine-managed (its handle is swapped
-  + re-uploaded by the standard texture restore protocol, §4.7), and the target
-  reattaches the fresh handle — the same per-target hook pattern the sprite
-  renderer uses (§3.6).
-- **Scope.** Color is RGBA8 by default, or any `GLTexture` passed via `colorTexture`
-  (e.g. a `createFloatTexture` half-float HDR target). Optional core depth16
-  (`generateDepthBuffer`); a packed depth-stencil / stencil-only attachment via the
-  opt-in `generateRenderTargetStencil` (/depth-stencil); `createFloatRenderTarget`,
-  the `generateRenderTargetMipMaps` function (mipmaps are NOT a create-option) and
-  `readRenderTargetPixels` readback are all available. Out of scope: MRT (§10).
-
-Packaging mirrors `/sprites` and `/html-texture`: re-exported from the barrel
-(`@babylonjs/lite-gl`) **and** available as the dedicated
-`@babylonjs/lite-gl/render-target` sub-entry (§3.0 rule 4). Because the package is
-`sideEffects: false` and the module has no top-level side effects, a bundler drops it
-from any bundle that doesn't use it, whichever path is imported.
-
----
-
 ## 4. Internal architecture — the cache layer
 
 ### 4.1 `GLState` type (owned by `GLEngineContext._state`)
@@ -716,47 +629,11 @@ interface GLState {
     boundArrayBuffer: WebGLBuffer | null;
     boundElementBuffer: WebGLBuffer | null;
     boundVao: WebGLVertexArrayObject | null;
-    /** Cached bound framebuffer — null means the default framebuffer (the
-     *  canvas). The single source of truth for the active FBO; `bindRenderTarget`
-     *  (the `/render-target` sub-entry) elides redundant `gl.bindFramebuffer`
-     *  against it. Reset to null on context-lost. */
-    boundFramebuffer: WebGLFramebuffer | null;
     viewportX: number; viewportY: number; viewportW: number; viewportH: number;
-
-    // ── Deferred render state (Babylon's applyStates model) ──────────────────
-    // The blend / depth / cull / stencil / colorMask render-state lives in ONE
-    // flat Float64Array(46) instead of ~42 named fields. Slots 0..20 (indexed by
-    // the @internal `RS_*` consts in state.ts) are the ACTUAL applied GL state;
-    // slots 21..41 (`rs[RS_X + RS_DESIRED]`) are the DESIRED twin the setters
-    // write; slots 42..45 are the standalone (no-desired-twin) cached gl.clearColor
-    // RGBA. `applyGLStates` reconciles desired → actual right before each draw /
-    // clear. Unset sentinels (both halves): -1 for the enable/mask toggles (and
-    // colorMask packed), 0 for the factor/func/op enum slots — chosen so a desired
-    // slot that still equals its actual twin never issues a GL call.
-    //
-    // WHY an index-array (not named fields): the deferred state is touched across
-    // state.ts ↔ blend.ts ↔ depth-stencil.ts ↔ apply-states.ts, so esbuild cannot
-    // mangle named properties — each long name (`.dBlendSrcRGB`) would ship
-    // verbatim, many times, in every scene bundle. The `RS_*` consts are plain
-    // integers esbuild inlines (`rs[RS_BLEND_SRC_RGB + RS_DESIRED]` → `rs[22]`),
-    // so the storage costs a single short array access everywhere. Float64 (not
-    // Int32) because stencilMask / stencilFuncMask can be 0xFFFFFFFF, which Int32
-    // stores as -1 — colliding with the -1 unset sentinel.
-    rs: Float64Array;                                // 46 = 21 actual + 21 desired + 4 clearColor
-    /** Raised by any deferred setter; cleared by `applyGLStates`. The flush is a
-     *  fast no-op when false, so a draw that changed no render state pays
-     *  nothing. */
-    statesDirty: boolean;
-    // Per-category reconcilers, installed onto these slots the first time the
-    // matching setter runs (a runtime assignment — NOT a module-level side
-    // effect). `applyGLStates` dispatches ONLY through these slots, so a category
-    // whose setter is absent from a scene tree-shakes its reconciler (and its GL
-    // code) out of the bundle — a clear-only scene drops all four. See §4.2.1.
-    _flushBlend?: (engine: GLEngineContext) => void;
-    _flushDepthCull?: (engine: GLEngineContext) => void;
-    _flushStencil?: (engine: GLEngineContext) => void;
-    _flushColorMask?: (engine: GLEngineContext) => void;
-
+    /** Cached blend mode — a GLBlendMode value, or -1 when unset (no
+     *  gl.enable/disable(BLEND) issued yet). setBlendMode elides redundant
+     *  enable/disable + blendFuncSeparate. Reset to -1 on context-lost. */
+    blendMode: number;
     /** Lazy fullscreen quad — built on first applyEffectWrapper, then reused
      *  for the lifetime of the context. Lives here (not in a module-scoped
      *  WeakMap) to satisfy the zero-side-effects rule. Cleared (set to null)
@@ -766,14 +643,6 @@ interface GLState {
     quadVao: WebGLVertexArrayObject | null;
 }
 ```
-
-> **Eager vs deferred.** Program / texture / buffer / VAO / framebuffer binds,
-> `viewport`, `scissor` and `pixelStorei` are applied EAGERLY on the setter call
-> (eliding only same-value writes). Blend / depth / cull / stencil / colorMask
-> are DEFERRED: their setters only record the desired half of `rs` and raise
-> `statesDirty`; the GL calls happen in `applyGLStates` (§4.2.1). This collapses
-> intra-frame churn (set A → set B → set A with no draw between applies once, as
-> A) and matches Babylon's `Engine.applyStates()`.
 
 ### 4.1.1 GL-state cache invalidation rules
 
@@ -786,14 +655,8 @@ kept in sync with actual GL state. Two protocols enforce that:
   same slot from being elided as a no-op.
 - **Context lost:** the `webglcontextlost` handler sets `_isLost=true` and
   clears the entire `_state` (program=null, boundTextures filled with null,
-  buffers=null, vao=null, boundFramebuffer=null, quad* = null, viewport=0, and
-  the whole `rs` array — BOTH its actual half AND its desired twins — back to the
-  unset sentinels with `statesDirty=false`). Resetting both halves means the
-  first setter after a restore re-marks `statesDirty` and the next
-  `applyGLStates` re-issues from scratch. The `_flush*` reconciler slots are NOT
-  cleared (they are pure function refs; a post-restore setter re-installs the
-  same ref idempotently, and `statesDirty=false` gates the flush until then).
-  Setters become no-ops while `_isLost`. See §4.7.
+  buffers=null, vao=null, quad* = null, viewport=0, blendMode=-1). Setters
+  become no-ops while `_isLost`. See §4.7.
 
 ### 4.2 Cache contract — which GL calls are elided
 
@@ -808,9 +671,8 @@ kept in sync with actual GL state. Two protocols enforce that:
 | `gl.bindBuffer(ARRAY_BUFFER, …)`         | `_state.boundArrayBuffer`              | Same buffer                                       |
 | `gl.bindBuffer(ELEMENT_ARRAY_BUFFER, …)` | `_state.boundElementBuffer`            | Same buffer                                       |
 | `gl.bindVertexArray`                     | `_state.boundVao`                      | Same VAO (the shared quad VAO lives forever)      |
-| `gl.bindFramebuffer`                     | `_state.boundFramebuffer`              | Same FBO already bound (`bindRenderTarget`; null = canvas) |
 | `gl.viewport`                            | `_state.viewportX/Y/W/H`               | All four match                                    |
-| blend / depth / cull / stencil / colorMask | `rs` actual slot vs desired twin (§4.2.1) | Deferred — applied by `applyGLStates`, per-slot elided when desired == actual |
+| `gl.enable/disable(BLEND)` + `blendFuncSeparate` | `_state.blendMode`             | Same blend mode already applied (`setBlendMode`)  |
 
 For the typical NeonBrush per-frame pattern (one effect, ~5 uniforms, 1–2 textures), after the first frame every steady-state frame issues exactly:
 
@@ -820,72 +682,6 @@ gl.drawElements(TRIANGLES, 6, UNSIGNED_SHORT, 0)
 ```
 
 — and nothing else. Program, VAO, sampler-uniforms, texture units, viewport are all already correct.
-
-### 4.2.1 Deferred render state — `applyGLStates`
-
-Blend, depth, cull, stencil and colorMask follow Babylon's `applyStates()` model
-rather than applying eagerly. Both the storage and the flush are tuned so an
-unused category costs a scene nothing:
-
-- **Storage — one index-array.** The whole deferred state lives in
-  `_state.rs`, a flat `Float64Array(46)`: slots `0..20` (the `@internal` `RS_*`
-  consts in `state.ts`) are the ACTUAL applied GL state, slots `21..41`
-  (`rs[RS_X + RS_DESIRED]`) the DESIRED twin, and slots `42..45` the standalone
-  cached `gl.clearColor` RGBA. This replaced ~42 named fields
-  (`blendEnabled` / `dBlendEnabled` / …): because the state is read/written across
-  four modules, esbuild could not mangle those property names, so each long name
-  shipped verbatim in every scene bundle. The `RS_*` consts are plain integers
-  esbuild inlines to short literals (`rs[RS_BLEND_SRC_RGB + RS_DESIRED]` →
-  `rs[22]`), reclaiming ~2.4 KB raw per scene. Float64 (not Int32) keeps a
-  `0xFFFFFFFF` stencil mask distinct from the `-1` unset sentinel.
-- **Setters** (`setBlendMode` / `setBlendState` / `disableBlend`, `setDepthState`,
-  `setCullState`, `setStencilState`, `setColorMask`) write ONLY the desired half
-  of `rs` and set `statesDirty = true`. They issue no `gl.*` and never touch the
-  actual half. Omitted setter fields leave their desired slot untouched
-  (merge-from-desired).
-- **Per-category dispatch (tree-shakeable).** `applyGLStates(engine)` (the
-  internal `apply-states.ts`, not exported from the barrel) owns NO reconciliation
-  code — it is a tiny dispatcher. Each category's reconciler (`flushBlend` in
-  blend.ts; `flushDepthCull` / `flushStencil` / `flushColorMask` in
-  depth-stencil.ts) is INSTALLED onto a `_state._flush*` slot the first time its
-  setter runs (a runtime assignment, not a module side effect). `applyGLStates`
-  then just calls whichever slots are populated, in the fixed order
-  blend → depth+cull → stencil → colorMask (reproducing the old monolith's GL
-  call order). Because each reconciler is reachable ONLY through the engine-state
-  slot its setter populates, a scene whose setter is absent tree-shakes that
-  reconciler — and its GL code — out of the bundle: a clear-only scene like
-  `gl-scissor` ships none of the four and `applyGLStates` collapses to four cheap
-  "is it installed?" checks.
-- Each reconciler no-ops when `statesDirty` is false (or the context is
-  lost/disposed — checked once in the dispatcher), otherwise issues only the GL
-  calls whose desired slot differs from its actual twin, copies desired→actual,
-  and the dispatcher clears `statesDirty`. The blend disabled/unset→enabled
-  transition force-issues both `blendEquationSeparate` + `blendFuncSeparate`
-  (Babylon's `AlphaState` does not track them while blending is off); thereafter
-  each is elided independently. The stencil func-triple and op-triple are each
-  issued as a unit.
-- **Flush sites** — `applyGLStates` is called immediately before every GPU op:
-  `drawEffect` (effect-renderer), `renderSprites` (sprites), `drawIndexed` (mesh),
-  and `clearEngine` before `gl.clear` (a clear respects the current write masks).
-
-Net effect: setting the same state every frame applies GL only on the first
-frame (cross-frame elision via the desired→actual compare), and intra-frame
-churn (A→B→A with no draw between) collapses to a single applied state.
-
-### 4.2.2 Effect cache — identical sources share one program
-
-`createEffect` keeps a per-engine `_effectCache: Map<string, GLEffect>` keyed by
-the source descriptor (vertex + fragment source, defines, attribute / uniform /
-sampler names, joined by `\u0000`). A second `createEffect` with an identical
-descriptor returns the SAME `GLEffect` (and its one `WebGLProgram`) and bumps a
-`_refCount` instead of compiling a duplicate program. `disposeEffect` decrements
-`_refCount` and only performs the real teardown (delete program/shaders, splice
-`_effects`, evict the cache entry, clear `currentProgram` if it matched) when the
-count reaches 0. Sharing one program handle is what lets `useEffect`'s
-`currentProgram` cache elide the redundant `gl.useProgram` when several consumers
-(e.g. multiple `createSpriteRenderer`s built from the same shader) render in turn.
-Context-restore is unaffected: each unique effect is registered in `_effects`
-exactly once, so its `_restore` runs once per program.
 
 ### 4.3 Branchless setter shape
 
@@ -1377,16 +1173,12 @@ Not implemented (NeonBrush doesn't need them): shader-store / `useShaderStore: t
    (`createRenderTarget` / `bindRenderTarget` / `resizeRenderTarget` /
    `disposeRenderTarget`, plus the `createPingPong` / `resizePingPong` /
    `disposePingPong` feedback helper; types `GLRenderTarget` /
-   `GLRenderTargetOptions` / `GLPingPong` — see §3.8). Scope is a single RGBA8
-   color attachment (or a bring-your-own `colorTexture` — e.g. a `createFloatTexture`
-   half-float HDR target — with `createFloatRenderTarget` as the direct HDR sugar),
-   an optional core
-   `DEPTH_COMPONENT16` renderbuffer (`generateDepthBuffer`), opt-in stencil via
-   `generateRenderTargetStencil` (/depth-stencil; packed `DEPTH24_STENCIL8` or
-   stencil-only `STENCIL_INDEX8`) and opt-in mipmaps via
-   `generateRenderTargetMipMaps`, ping-pong feedback, and GPU→CPU readback
-   (`readRenderTargetPixels`). NOT supported: multiple render targets (MRT,
-   item 10).
+   `GLRenderTargetOptions` / `GLPingPong`). Scope is a single RGBA8
+   color attachment (or a bring-your-own `colorTexture`, e.g. a `createFloatTexture`
+   half-float HDR target via `createFloatRenderTarget`), an optional
+   `DEPTH_COMPONENT16` / packed `DEPTH24_STENCIL8` renderbuffer, mipmaps, ping-pong
+   feedback, and GPU→CPU readback (`readRenderTargetPixels`). NOT supported:
+   multiple render targets (MRT, item 10).
 3. `SpriteRenderer` / `ThinSprite` are available via the `/sprites` sub-entry
    (`createSpriteRenderer` / `renderSprites` / `GLSprite`), matching Babylon's
    non-instanced 4-vertex path for parity. NOT ported: `ThinSprite` animation
@@ -1516,7 +1308,7 @@ Example:
 this.engine.createRawTexture(new Uint8Array(4), 1, 1, 5, false, false, 1, null, 0);
 // After
 createRawTexture(engine, new Uint8Array(4), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE,
-    { invertY: false, minFilter: gl.NEAREST, magFilter: gl.NEAREST });
+    { generateMipMaps: false, invertY: false, minFilter: gl.NEAREST, magFilter: gl.NEAREST });
 ```
 
 ---
@@ -1738,7 +1530,7 @@ As-built layout:
 
 ```
 packages/babylon-lite-gl/
-    package.json            scoped @babylonjs/lite-gl, ./html-texture + ./sprites + ./render-target sub-entries
+    package.json            scoped @babylonjs/lite-gl; ./html-texture + ./sprites + ./render-target + ./mesh + ./depth-stencil + ./scissor + ./dynamic-texture sub-entries
     tsconfig.json
     vite.config.ts          builds index + sub-entries, trims @internal, emits dist/package.json
     README.md
@@ -1753,11 +1545,15 @@ packages/babylon-lite-gl/
         html-texture.ts     sub-entry (/html-texture): createHtmlElementTexture/updateHtmlElementTexture/GLSamplingMode
         blend.ts            GLBlendMode preset + setBlendMode (cached, Babylon setAlphaMode parity)
         sprites.ts          sub-entry (/sprites): GLSprite + createSpriteRenderer/renderSprites/dispose (own VAO/VBO/IBO)
-        render-target.ts    sub-entry (/render-target): createRenderTarget/bindRenderTarget/resizeRenderTarget/disposeRenderTarget + createPingPong/resizePingPong/disposePingPong (FBO + color tex + optional depth)
         effect-renderer.ts  ensureQuad, setViewport, applyEffectWrapper, drawEffect
+        render-target.ts    sub-entry (/render-target): createRenderTarget/createFloatRenderTarget/bindRenderTarget(rt|null)/resizeRenderTarget/disposeRenderTarget/readRenderTargetPixels/generateRenderTargetMipMaps + ping-pong
+        mesh.ts             sub-entry (/mesh): createVertexBuffer/updateVertexBuffer/createIndexBuffer/bindAttributes/drawIndexed/disposeBuffer
+        depth-stencil.ts    sub-entry (/depth-stencil): setDepthState/setStencilState/setCullState/setColorMask/clearEngine
+        scissor.ts          sub-entry (/scissor): setScissor/disableScissor
+        dynamic-texture.ts  sub-entry (/dynamic-texture): createDynamicTexture/updateDynamicTexture/clearDynamicTextureSource
 
 tests/gl/                   four-layer harness (mirrors tests/lite/), tsconfig.json
-    unit/                   vitest mock-GL — _lite-gl-mock.ts, {blend,cache,html-texture,render-loop,sprites,render-target}.test.ts
+    unit/                   vitest mock-GL — _lite-gl-mock.ts, {blend,cache,html-texture,render-loop,sprites}.test.ts
     build/                  public-api.test.ts (built dist + trimmed .d.ts)
     parity/                 Playwright pixel-diff vs Babylon ThinEngine — compare-utils.ts, gl-parity.spec.ts
     perf/                   gl-perf-raf.spec.ts (frame cost) + gl-perf-regression.spec.ts (vs Babylon ref)

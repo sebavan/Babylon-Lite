@@ -39,6 +39,13 @@ export default defineConfig({
                     testTimeout: 300_000,
                 },
             },
+            {
+                extends: true,
+                test: {
+                    name: "lottie-unit",
+                    include: ["tests/lottie/unit/**/*.test.ts"],
+                },
+            },
         ],
     },
 });

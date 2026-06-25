@@ -131,7 +131,7 @@ describe("lite-gl render-target: createRenderTarget", () => {
     });
 });
 
-describe("lite-gl render-target: depth attachment", () => {
+describe("lite-gl render-target: depth / stencil attachments", () => {
     it("depth-only → DEPTH_COMPONENT16 on DEPTH_ATTACHMENT", () => {
         const { mock, engine, gl } = setup();
         mock.clear();
@@ -149,13 +149,20 @@ describe("lite-gl render-target: depth attachment", () => {
         expect(rt._depthStencil).not.toBeNull();
     });
 
-    it("no depth requested → no renderbuffer + a null _depthStencil", () => {
-        const { mock, engine } = setup();
+    it("stencil-only → STENCIL_INDEX8 on STENCIL_ATTACHMENT", () => {
+        const { mock, engine, gl } = setup();
         mock.clear();
-        const rt = createRenderTarget(engine, { width: 8, height: 8 });
-        expect(mock.count("createRenderbuffer")).toBe(0);
-        expect(mock.count("renderbufferStorage")).toBe(0);
-        expect(rt._depthStencil).toBeNull();
+        createRenderTarget(engine, { width: 8, height: 8, generateStencilBuffer: true });
+        expect(callsNamed(mock, "renderbufferStorage")[0]?.args[1]).toBe(gl.STENCIL_INDEX8);
+        expect(callsNamed(mock, "framebufferRenderbuffer")[0]?.args[1]).toBe(gl.STENCIL_ATTACHMENT);
+    });
+
+    it("depth + stencil → packed DEPTH24_STENCIL8 on DEPTH_STENCIL_ATTACHMENT", () => {
+        const { mock, engine, gl } = setup();
+        mock.clear();
+        createRenderTarget(engine, { width: 8, height: 8, generateDepthBuffer: true, generateStencilBuffer: true });
+        expect(callsNamed(mock, "renderbufferStorage")[0]?.args[1]).toBe(gl.DEPTH24_STENCIL8);
+        expect(callsNamed(mock, "framebufferRenderbuffer")[0]?.args[1]).toBe(gl.DEPTH_STENCIL_ATTACHMENT);
     });
 });
 
@@ -252,52 +259,67 @@ describe("lite-gl render-target: bindRenderTarget", () => {
     });
 });
 
-describe("lite-gl render-target: manual mipmap generation", () => {
-    it("creation never generates a mip chain (mipmaps are an explicit opt-in function)", () => {
+describe("lite-gl render-target: mipmap regeneration (mip-based blur correctness)", () => {
+    it("a mipmapped target generates its mip chain at creation (never mipmap-incomplete)", () => {
         const { mock, engine } = setup();
         mock.clear();
-        createRenderTarget(engine, { width: 16, height: 16 });
+        createRenderTarget(engine, { width: 16, height: 16, generateMipMaps: true });
+        expect(mock.count("generateMipmap")).toBe(1);
+    });
+
+    it("a non-mipmapped target never calls generateMipmap across bind/unbind", () => {
+        const { mock, engine } = setup();
+        const rt = createRenderTarget(engine, { width: 16, height: 16 });
+        mock.clear();
+        bindRenderTarget(engine, rt);
+        bindRenderTarget(engine, null);
         expect(mock.count("generateMipmap")).toBe(0);
     });
 
-    it("bindRenderTarget never auto-regenerates mips across switch / unbind", () => {
+    it("bind(null) refreshes a mipmapped target's mip chain after rendering and clears _currentRenderTarget", () => {
         const { mock, engine } = setup();
-        const a = createRenderTarget(engine, { width: 16, height: 16 });
-        const b = createRenderTarget(engine, { width: 16, height: 16 });
-        bindRenderTarget(engine, a);
+        const rt = createRenderTarget(engine, { width: 16, height: 16, generateMipMaps: true });
+        bindRenderTarget(engine, rt);
         mock.clear();
-        bindRenderTarget(engine, b); // leaving `a` — no auto-regen anymore
-        bindRenderTarget(engine, null); // leaving `b` — no auto-regen anymore
-        expect(mock.count("generateMipmap")).toBe(0);
+        bindRenderTarget(engine, null);
+        expect(mock.count("generateMipmap")).toBe(1);
         expect(engine._currentRenderTarget).toBeNull();
     });
 
-    it("generateRenderTargetMipMaps regenerates the color texture's mip chain on demand", () => {
+    it("switching from one mipmapped target to another refreshes the OUTGOING one", () => {
         const { mock, engine } = setup();
-        const rt = createRenderTarget(engine, { width: 16, height: 16 });
-        // Displace texture unit 0 so the manual call's bind-for-upload is observable.
-        const other = createRawTexture(engine, null, 1, 1, engine.gl.RGBA, engine.gl.UNSIGNED_BYTE);
-        bindTexture(engine, 0, other);
+        const a = createRenderTarget(engine, { width: 16, height: 16, generateMipMaps: true });
+        const b = createRenderTarget(engine, { width: 16, height: 16, generateMipMaps: true });
+        bindRenderTarget(engine, a);
         mock.clear();
-        generateRenderTargetMipMaps(engine, rt);
+        bindRenderTarget(engine, b); // leaving `a` → regenerate a's mips
         expect(mock.count("generateMipmap")).toBe(1);
-        // The generateMipmap targets the RT's color texture (bound for the upload).
-        const bind = lastCall(mock, "bindTexture");
-        expect(bind?.args[1]).toBe(rt.texture.handle);
+        expect(engine._currentRenderTarget).toBe(b);
     });
 
-    it("generateRenderTargetMipMaps is a no-op on a disposed target", () => {
+    it("re-binding the SAME mipmapped target does not regenerate mid-render", () => {
         const { mock, engine } = setup();
-        const rt = createRenderTarget(engine, { width: 16, height: 16 });
-        disposeRenderTarget(engine, rt);
+        const rt = createRenderTarget(engine, { width: 16, height: 16, generateMipMaps: true });
+        bindRenderTarget(engine, rt);
         mock.clear();
-        generateRenderTargetMipMaps(engine, rt);
+        bindRenderTarget(engine, rt);
         expect(mock.count("generateMipmap")).toBe(0);
+    });
+
+    it("generateRenderTargetMipMaps (public) regenerates a mipmapped target and is a no-op for a non-mipmapped one", () => {
+        const { mock, engine } = setup();
+        const mipped = createRenderTarget(engine, { width: 16, height: 16, generateMipMaps: true });
+        const plain = createRenderTarget(engine, { width: 16, height: 16 });
+        mock.clear();
+        generateRenderTargetMipMaps(engine, mipped);
+        expect(mock.count("generateMipmap")).toBe(1);
+        generateRenderTargetMipMaps(engine, plain);
+        expect(mock.count("generateMipmap")).toBe(1); // unchanged — no-op for non-mipmapped
     });
 
     it("disposing the current target clears the tracked reference", () => {
         const { engine } = setup();
-        const rt = createRenderTarget(engine, { width: 16, height: 16 });
+        const rt = createRenderTarget(engine, { width: 16, height: 16, generateMipMaps: true });
         bindRenderTarget(engine, rt);
         disposeRenderTarget(engine, rt);
         expect(engine._currentRenderTarget).toBeNull();

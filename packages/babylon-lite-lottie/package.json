@@ -1,0 +1,66 @@
+{
+    "name": "babylon-lite-lottie",
+    "version": "0.1.0",
+    "private": true,
+    "description": "Tiny, tree-shakeable Lottie player rendering on @babylonjs/lite-gl (WebGL2) — the lite counterpart of Babylon.js' lottiePlayer, with no @babylonjs/core dependency.",
+    "keywords": ["babylon", "babylonjs", "lottie", "animation", "webgl", "webgl2", "lite", "sprite"],
+    "license": "Apache-2.0",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/BabylonJS/Babylon-Lite.git",
+        "directory": "packages/babylon-lite-lottie"
+    },
+    "homepage": "https://github.com/BabylonJS/Babylon-Lite/tree/main/packages/babylon-lite-lottie",
+    "type": "module",
+    "main": "./src/index.ts",
+    "types": "./src/index.ts",
+    "sideEffects": false,
+    "exports": {
+        ".": {
+            "import": "./src/index.ts",
+            "types": "./src/index.ts"
+        },
+        "./local": {
+            "import": "./src/local.ts",
+            "types": "./src/local.ts"
+        },
+        "./worker": {
+            "import": "./src/worker.ts",
+            "types": "./src/worker.ts"
+        }
+    },
+    "files": ["dist"],
+    "scripts": {
+        "build": "vite build",
+        "build:prod": "vite build --mode prod",
+        "dev": "vite build --watch"
+    },
+    "dependencies": {
+        "babylon-lite-gl": "workspace:*"
+    },
+    "devDependencies": {
+        "@microsoft/api-extractor": "^7.58.7",
+        "typescript": "^5.7.0",
+        "vite": "^6.0.0",
+        "vite-plugin-dts": "^4.5.4"
+    },
+    "publishConfig": {
+        "name": "@babylonjs/lite-lottie",
+        "main": "./dist/index.js",
+        "types": "./dist/index.d.ts",
+        "exports": {
+            ".": {
+                "import": "./dist/index.js",
+                "types": "./dist/index.d.ts"
+            },
+            "./local": {
+                "import": "./dist/local.js",
+                "types": "./dist/local.d.ts"
+            },
+            "./worker": {
+                "import": "./dist/worker.js",
+                "types": "./dist/worker.d.ts"
+            }
+        }
+    }
+}
